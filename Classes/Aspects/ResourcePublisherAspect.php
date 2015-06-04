@@ -4,6 +4,7 @@ namespace MOC\ImageOptimizer\Aspects;
 use TYPO3\Flow\Annotations as Flow;
 use TYPO3\Flow\Aop\JoinPointInterface;
 use TYPO3\Flow\Reflection\ObjectAccess;
+use TYPO3\Flow\Cache\Frontend\StringFrontend;
 
 /**
  * @Flow\Scope("singleton")
@@ -27,6 +28,12 @@ class ResourcePublisherAspect {
 	 * @var array
 	 */
 	protected $settings;
+
+	/**
+	 * @Flow\Inject
+	 * @var StringFrontend
+	 */
+	protected $processingCache;
 
 	/**
 	 * @param array $settings
@@ -70,6 +77,11 @@ class ResourcePublisherAspect {
 		$imageType = exif_imagetype($pathAndFilename);
 		$fileExtension = strtolower(pathinfo($pathAndFilename, PATHINFO_EXTENSION));
 		if (($imageType !== FALSE && !in_array($imageType, [\IMAGETYPE_JPEG, \IMAGETYPE_PNG, \IMAGETYPE_GIF], TRUE)) || ($imageType === FALSE && $fileExtension !== 'svg')) {
+			return;
+		}
+
+		$cacheIdentifier = md5($pathAndFilename);
+		if ($this->processingCache->has($cacheIdentifier)) {
 			return;
 		}
 
@@ -124,11 +136,14 @@ class ResourcePublisherAspect {
 				$useGlobalBinary = TRUE;
 			}
 		}
+
 		$binaryPath = $useGlobalBinary === TRUE ? $library : $this->packageManager->getPackageOfObject($this)->getResourcesPath() . $binaryRootPath . $binaryPath;
 		$cmd = escapeshellcmd($binaryPath) . ' ' . $arguments;
 		$output = [];
 		exec($cmd, $output, $result);
+
 		$this->systemLogger->log($cmd . ' (' . $result . ')', LOG_INFO, $output);
+		$this->processingCache->set($cacheIdentifier, 'done');
 	}
 
 }
