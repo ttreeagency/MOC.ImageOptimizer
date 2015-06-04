@@ -3,6 +3,8 @@ namespace MOC\ImageOptimizer\Aspects;
 
 use TYPO3\Flow\Annotations as Flow;
 use TYPO3\Flow\Aop\JoinPointInterface;
+use TYPO3\Flow\Reflection\ObjectAccess;
+use TYPO3\Flow\Cache\Frontend\StringFrontend;
 
 /**
  * @Flow\Scope("singleton")
@@ -26,6 +28,12 @@ class ResourcePublisherAspect {
 	 * @var array
 	 */
 	protected $settings;
+
+	/**
+	 * @Flow\Inject
+	 * @var StringFrontend
+	 */
+	protected $processingCache;
 
 	/**
 	 * @param array $settings
@@ -55,7 +63,9 @@ class ResourcePublisherAspect {
 	 * @return void
 	 */
 	public function optimizePublishedFile(JoinPointInterface $joinPoint) {
-		$this->optimizeFile($joinPoint->getMethodArgument('relativeTargetPathAndFilename'));
+		$proxy = $joinPoint->getProxy();
+		$path = ObjectAccess::getProperty($proxy, 'path', TRUE);
+		$this->optimizeFile($path . $joinPoint->getMethodArgument('relativeTargetPathAndFilename'));
 	}
 
 	/**
@@ -70,6 +80,11 @@ class ResourcePublisherAspect {
 			return;
 		}
 
+		$cacheIdentifier = md5($pathAndFilename);
+		if ($this->processingCache->has($cacheIdentifier)) {
+			return;
+		}
+
 		$useGlobalBinary = $this->settings['useGlobalBinary'];
 		$binaryRootPath = 'Private/Library/node_modules/';
 		$file = escapeshellarg(realpath($pathAndFilename));
@@ -80,6 +95,7 @@ class ResourcePublisherAspect {
 						return;
 					}
 					$library = 'jpegtran';
+					$binaryPath = sprintf('jpegtran-bin/vendor/%s', $library);
 					$arguments = sprintf('-copy none -optimize %s -outfile %s %s', $this->settings['formats']['jpg']['progressive'] === TRUE ? '-progressive' : '', $file, $file);
 					if ($this->settings['formats']['jpg']['useGlobalBinary'] === TRUE) {
 						$useGlobalBinary = TRUE;
@@ -90,6 +106,7 @@ class ResourcePublisherAspect {
 						return;
 					}
 					$library = 'optipng';
+					$binaryPath = sprintf('optipng-bin/vendor/%s', $library);
 					$arguments = sprintf('-o%u -strip all -out %s %s', $this->settings['formats']['png']['optimizationLevel'], $file, $file);
 					if ($this->settings['formats']['png']['useGlobalBinary'] === TRUE) {
 						$useGlobalBinary = TRUE;
@@ -100,13 +117,14 @@ class ResourcePublisherAspect {
 						return;
 					}
 					$library = 'gifsicle';
+					$binaryPath = sprintf('%1$s/vendor/%1$s', $library);
 					$arguments = sprintf('--batch -O%u %s ', $this->settings['formats']['gif']['optimizationLevel'], $file);
 					if ($this->settings['formats']['gif']['useGlobalBinary'] === TRUE) {
 						$useGlobalBinary = TRUE;
 					}
 					break;
 			}
-			$binaryPath = sprintf('%1$s/vendor/%1$s', $library);
+
 		} else {
 			if ($this->settings['formats']['svg']['enabled'] === FALSE) {
 				return;
@@ -118,11 +136,14 @@ class ResourcePublisherAspect {
 				$useGlobalBinary = TRUE;
 			}
 		}
+
 		$binaryPath = $useGlobalBinary === TRUE ? $library : $this->packageManager->getPackageOfObject($this)->getResourcesPath() . $binaryRootPath . $binaryPath;
 		$cmd = escapeshellcmd($binaryPath) . ' ' . $arguments;
 		$output = [];
 		exec($cmd, $output, $result);
+
 		$this->systemLogger->log($cmd . ' (' . $result . ')', LOG_INFO, $output);
+		$this->processingCache->set($cacheIdentifier, 'done');
 	}
 
 }
